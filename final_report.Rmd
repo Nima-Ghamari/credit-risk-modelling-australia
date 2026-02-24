@@ -1,0 +1,1184 @@
+---
+title: "Major Data analysis project"
+author:
+- Group 2
+- "Mazen Imad Jaber - n9940669"
+- Aidan Lockwood
+- Nima Ghamari
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggcorrplot)
+library(GGally)
+library(MASS)
+library(ggpubr)
+library(DHARMa)
+library(AER)
+library(readxl)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(rpart)
+library(caret)
+library(randomForest)
+library(pROC)
+library(lme4)
+library(AICcmodavg)
+library(reshape2)
+library(lmerTest)
+library(knitr)
+library(gridExtra)
+
+
+
+# Calculate the Gini score
+calc_gini <- function(roc) {
+  2 * auc(roc) -1
+}
+testing_data <- read.csv("data/benchmark_testing_loan_data.csv", header = TRUE,  row.names = 1)
+training_data <- read.csv("data/benchmark_training_loan_data.csv", header = TRUE,  row.names = 1)
+validation_data <- read.csv("data/benchmark_validation_loan_data.csv", header = TRUE,  row.names = 1)
+extend_version_data <- read.csv("data/extended_version_loan_data.csv", header = TRUE,  row.names = 1)
+training_data$repay_fail <- factor(x = training_data$repay_fail)
+testing_data$repay_fail <- factor(x = testing_data$repay_fail)
+validation_data$repay_fail <- factor(x = validation_data$repay_fail)
+#extend_version_data$repay_fail <- factor(x = extend_version_data$repay_fail)
+training_data$term <- factor(x = training_data$term)
+testing_data$term <- factor(x = testing_data$term)
+validation_data$term <- factor(x = validation_data$term)
+extend_version_data$term <- factor(x = extend_version_data$term)
+extend_version_data <- extend_version_data[extend_version_data$home_ownership != "NONE", ]
+training_data <- training_data[training_data$home_ownership != "NONE", ]
+training_data$home_ownership <- factor(x = training_data$home_ownership)
+testing_data$home_ownership <- factor(x = testing_data$home_ownership)
+validation_data$home_ownership <- factor(x = validation_data$home_ownership)
+extend_version_data$home_ownership <- factor(x = extend_version_data$home_ownership)
+training_data$verification_status <- factor(x = training_data$verification_status)
+testing_data$verification_status <- factor(x = testing_data$verification_status)
+validation_data$verification_status <- factor(x = validation_data$verification_status)
+extend_version_data$verification_status <- factor(x = extend_version_data$verification_status)
+training_data$purpose <- factor(x = training_data$purpose)
+testing_data$purpose <- factor(x = testing_data$purpose)
+validation_data$purpose <- factor(x = validation_data$purpose)
+extend_version_data$purpose <- factor(x = extend_version_data$purpose)
+training_data <- training_data[training_data$emp_length != "n/a", ]
+testing_data <- testing_data[testing_data$emp_length != "n/a", ]
+validation_data <- validation_data[validation_data$emp_length != "n/a", ]
+extend_version_data <- extend_version_data[extend_version_data$emp_length != "n/a", ]
+emp_length_dic <- c("< 1 year", "1 year", "2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 years", "10+ years")
+training_data$emp_length <- factor(x = training_data$emp_length, levels =emp_length_dic )
+testing_data$emp_length <- factor(x = testing_data$emp_length, levels =emp_length_dic )
+validation_data$emp_length <- factor(x = validation_data$emp_length, levels =emp_length_dic )
+extend_version_data$emp_length <- factor(x = extend_version_data$emp_length, levels =emp_length_dic )
+
+```
+
+# **Introduction**
+
+The aim of the project is to develop a robust credit risk model using GLMs and GLMMs to predict loan default probability for a recently acquired peer-to-peer lending start up by a regional Australian bank. The main concern for the bank is that all the previous credit risk models, which were employed by the start up, have been ad hoc without required rigors with a view to meeting strict regulatory standards.
+
+### **Project Objectives**
+
+The primary objective is to rebuild the credit risk model from the ground up, employing advanced statistical techniques to improve its predictive accuracy. This involves addressing the following key questions:
+
+How does the new model perform compared to the old model with respect to the defaults of loans? What are the critical driving variables of credit risk, and what are their relationships to the ones in traditional banking sectors? Can accounting for variations over time and geography - state or zip code, say - improve this model's performance? In order to meet these needs, we used two models: Generalized Linear Model (GLM): For the first two questions, to optimize model performance and get the important variables; Generalized Linear Mixed Effects Model (GLMM): Discriminating between time and geographical variation as suggested by the industry expert for question(s) concerning jurisdictional differences in credit risk.
+
+### **Key Analysis Focus**
+
+Our objective in modeling will be to derive models that predict loan defaulters using information available to the lender at the time the loan is applied for. Using Random Forests and selection of either the most relevant predictors, or Stepwise Selection via the Akaike information criterion, variable selection is made. Its performance should also be benchmarked on Gini scores, ROC curves, and other benchmark industry metrics to ensure the model is robust yet interpretable.
+
+With this report, we will be gauging the impact of key variables that include debt consolidation, employment length, and credit age in loan defaults. We will also show how time and geographic variation may affect our model performance by adding these factors into our mixed-effects models.
+
+### **Available Data**
+- the training data has `r nrow(training_data)` rows and `r ncol(training_data)` columns. 
+- the testing data has `r nrow(testing_data)` rows and `r ncol(testing_data)` columns.
+- the validation data has `r nrow(validation_data)` rows and `r ncol(validation_data)` columns.
+- the extended version data has `r nrow(extend_version_data)` rows and `r ncol(extend_version_data)` columns.
+
+**annual_inc**: The self-reported annual income provided by the borrower during registration.
+
+**credit_age_yrs**: The age of the oldest credit line in years (years since the first credit line was opened).
+
+**deliq_2yrs**: The number of 30+ days past-due incidences of delinquency in the borrower's credit file for the past 2 years. since this is hirstorical data of the last two years it is could be used good indicator of the borrowers ability to repay the loan.
+
+**dti**: A ratio calculated using the borrower’s total monthly debt payments on the total debt obligations, excluding mortgage and the requested LC loan, divided by the borrower’s self-reported monthly income. As this is a ratio of the borrowers monthly debt to income, and it does not include the mortgage, it could be a good indicator of the borrowers ability to repay the loan.
+
+**earliest_cr_line**: The month the borrower's earliest reported credit line was opened. This could be a good indicator of the borrowers credit history.
+
+**emp_length**: Employment length in years. Possible values are between less than 1 year and 10+ years. This could be a good indicator of the borrowers ability to repay the loan.
+
+**home_ownership**: The home ownership status provided by the borrower during registration. Our data has three. 
+
+**categories**: RENT, MORTGAGE, and OWN. This could be a good indicator of the borrowers ability to repay the loan.
+
+**inq_last_6mths**: The number of inquiries in the past 6 months (excluding auto and mortgage inquiries). This could be a good indicator of the borrowers ability to repay the loan. inquires in this context are the number of times the borrower has applied for credit in the last 6 months.
+
+**int_rate**: Interest rate on the loan. This could be a good indicator of the borrowers ability to repay the loan.
+
+**issue_d**: The month which the loan was funded. only available in the extended version data.
+
+**loan_amnt**: The listed amount of the loan applied for by the borrower. This could be a good indicator of the borrowers ability to repay the loan.
+
+**pub_rec**: Number of derogatory public records.
+
+**purpose**: A category provided by the borrower for the loan request. this can be used in this analysis to see if the purpose of the loan has an effect on the repayment rate.
+
+**revol_bal**: Total credit revolving balance. in the banking context, a revolving balance is the amount of money owed on a credit card account at the end of a billing cycle. This could be a good indicator of the borrowers ability to repay the loan.
+
+**revol_util**: Revolving line utilization rate, or the amount of credit the borrower is using relative to all available revolving credit. 
+
+**term**: The number of payments on the loan. Values are in months and can be either 36 or 60. This could be a good indicator of the borrowers ability to repay the loan.
+
+**total_acc**: The total number of credit lines currently in the borrower's credit file. This could be a good indicator of the borrowers ability to repay the loan.
+**open_acc**: The number of open credit lines in the borrower's credit file. This could be a good indicator of the borrowers ability to repay the loan.
+
+to avoid multicollinearity, we will create a new variable called **close_acc** which is the difference between total_acc and open_acc. 
+
+
+```{r}
+# add close accounts
+extend_version_data$close_acc <- extend_version_data$total_acc - extend_version_data$open_acc
+training_data$close_acc <- training_data$total_acc - training_data$open_acc
+testing_data$close_acc <- testing_data$total_acc - testing_data$open_acc
+validation_data$close_acc <- validation_data$total_acc - validation_data$open_acc
+# drop total_acc column
+extend_version_data <- extend_version_data[, !colnames(extend_version_data) %in% c("total_acc")]
+training_data <- training_data[, !colnames(training_data) %in% c("total_acc")]
+testing_data <- testing_data[, !colnames(testing_data) %in% c("total_acc")]
+validation_data <- validation_data[, !colnames(validation_data) %in% c("total_acc")]
+```
+
+
+**verification_status**: Indicates if income was verified by LC, not verified, or if the income source was verified. This could be a good indicator of the borrowers ability to repay the loan.
+
+**addr_state**: The state provided by the borrower in the loan application. This could be a good indicator of the borrowers ability to repay the loan.
+
+**zip_code**: The first 3 numbers of the zip code provided by the borrower in the loan application.
+
+```{r include=FALSE}
+# the information below was genrated using ChatGPT
+# prompt: "Visualise data of us state giving zip code letters like "NY" or "CA""
+
+# Get map data for the US states
+states_map <- map_data("state")
+# Get map data
+us_map <- map_data("state")
+zip_state_map <- data.frame(
+  zip_prefix = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", 
+                 "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", 
+                 "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", 
+                 "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", 
+                 "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
+  state = c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
+            "Connecticut", "Delaware", "District of Columbia", "Florida", "Georgia", 
+            "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", 
+            "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", 
+            "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", 
+            "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", 
+            "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", 
+            "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", 
+            "Washington", "West Virginia", "Wisconsin", "Wyoming")
+)
+```
+
+```{r include=FALSE}
+# genrate summary statistics for each state bases on mean for numeric data and most frequent value for catagorical data, and median for count data
+# Function to calculate the most frequent value (mode)
+get_mode <- function(x) {
+  x <- na.omit(x)  # Remove NAs
+  ux <- unique(x)   # Get unique values
+  ux[which.max(tabulate(match(x, ux)))]  # Find the value with max frequency
+}
+
+# Generate summary statistics
+grouped_data <- extend_version_data %>%
+  group_by(addr_state) %>%
+  summarise(
+    # Mean for numeric data
+    int_rate_mean = mean(int_rate, na.rm = TRUE),
+    loan_amnt_mean = mean(loan_amnt, na.rm = TRUE),
+    annual_inc_mean = mean(annual_inc, na.rm = TRUE),
+    dti_mean = mean(dti, na.rm = TRUE),
+    revol_bal_mean = mean(revol_bal, na.rm = TRUE),
+    revol_util_mean = mean(revol_util, na.rm = TRUE),
+    credit_age_yrs_mean = mean(credit_age_yrs, na.rm = TRUE),
+    
+    # Median for count data
+    delinq_2yrs_med = median(delinq_2yrs, na.rm = TRUE),
+    inq_last_6mths_med = median(inq_last_6mths, na.rm = TRUE),
+    open_acc_med = median(open_acc, na.rm = TRUE),
+    pub_rec_median = median(pub_rec, na.rm = TRUE),
+    close_acc_median = median(close_acc, na.rm = TRUE),
+    
+    # Mode (most frequent value) for categorical data
+    repay_fail_mode = get_mode(as.factor(repay_fail)),
+    emp_length_mode = get_mode(emp_length),
+    purpose_mode = get_mode(purpose),
+    home_ownership_mode = get_mode(home_ownership),
+    term_mode = get_mode(term),
+    verification_status_mode = get_mode(verification_status)
+  )
+```
+
+```{r include=FALSE}
+# Merge map data with your data
+grouped_data <- grouped_data %>%
+  left_join(zip_state_map, by = c( "addr_state" = "zip_prefix"))
+grouped_data$state <- tolower(grouped_data$state)
+```
+
+
+```{r include=FALSE}
+grouped_data <- us_map %>%
+  left_join(grouped_data, by = c("region" = "state"))
+
+
+state_labels <- grouped_data %>%
+  group_by(addr_state) %>%  # Change 'state_abbr' to your state column name
+  summarize(long = mean(long), lat = mean(lat))
+```
+
+
+
+```{r include=FALSE}
+st1<- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = int_rate_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs(title = "Mean interest") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+
+st2<-ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = loan_amnt_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs(title = "Mean load amount ($)") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st3 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = annual_inc_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs(title = " mean annual income  ($)") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st4 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = dti_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "average debt to income ratio") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st5 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = inq_last_6mths_med)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "median inquiries in last 6 months") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st6 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = open_acc_med)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "median open accounts") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+
+st7 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = revol_bal_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "average revolving balance ($)") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st8<- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = revol_util_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "average revolving utilisation rate") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+st9 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = close_acc_median)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "median # of closed accounts per state") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+
+st10 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = credit_age_yrs_mean)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "average credit age (years)") +
+  scale_fill_gradient(low = "white", high = "blue", na.value = "grey50") +
+  theme(legend.position = "none")
+
+
+st11 <- ggplot(data = grouped_data, aes(x = long, y = lat,group = group, fill = repay_fail_mode)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "mode repay fail per state") +
+  scale_fill_manual(values = c("green", "red"), na.value = "grey50")  
+
+
+st12 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = emp_length_mode)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "mode employment length/ state") +
+  scale_fill_viridis_d(na.value = "grey50")   
+
+
+st13 <- ggplot(data = grouped_data, aes(x = long, y = lat, group = group, fill = home_ownership_mode)) +
+  geom_polygon(color = "black") +
+  coord_fixed(1.3) +
+  theme_minimal() +
+  labs( title = "home ownership mode / state") +
+  scale_fill_viridis_d(na.value = "grey50") 
+ 
+```
+
+# **Data Preparation**
+
+-   **Convert categorical variables to factors**:\
+    Addressed in the section where categorical variables like `repay_fail`, `term`, `home_ownership`, and `verification_status` are converted to factors for all datasets.
+
+``` r
+  training_data$repay_fail <- factor(x = training_data$repay_fail)
+  testing_data$repay_fail <- factor(x = testing_data$repay_fail)
+  # Applies to several other variables like term, purpose, home_ownership.
+```
+
+#### Removing invalid values:
+
+Rows with invalid values (e.g., home_ownership = NONE and missing emp_length values) are removed.
+``` r
+extend_version_data <- extend_version_data[extend_version_data$home_ownership != "NONE", ]
+training_data <- training_data[training_data$home_ownership != "NONE", ]
+# Same process for employment length, removing rows where emp_length = "n/a".
+```
+## Date data
+The date data requires conversion to a Date object and correction of years in the 2068-2099 range.
+```{r}
+# Convert to Date format (assume the 1st day of the month)
+extend_version_data$earliest_cr_line <- as.Date(paste("01", extend_version_data$earliest_cr_line), format = "%d %b-%y")
+
+# Check and correct years that are incorrectly in 2068-2099 range
+extend_version_data$earliest_cr_line <- ifelse(year(extend_version_data$earliest_cr_line) > 2024, 
+                                               extend_version_data$earliest_cr_line - years(100), 
+                                               extend_version_data$earliest_cr_line)
+
+# Convert to Date object again (ifelse returns characters, so reconvert)
+extend_version_data$earliest_cr_line <- as.Date(extend_version_data$earliest_cr_line)
+extend_version_data$issue_d <-  as.Date(paste("01", extend_version_data$issue_d), format = "%d %b-%y")
+# extend_version_data$issue_year <- year(extend_version_data$issue_d)
+range(extend_version_data$issue_d)
+range(extend_version_data$earliest_cr_line)
+```
+
+```{r include=FALSE}
+# remove the 3 XXX at the end of the zip code
+extend_version_data$zip_code <- substr(extend_version_data$zip_code, 1, 3)
+# convert geographic data to factors
+extend_version_data$zip_code <- factor(x = extend_version_data$zip_code)
+extend_version_data$addr_state <- factor(x = extend_version_data$addr_state)
+
+```
+
+
+### **3. Visualization of Variable Relationships**
+
+-   **Loan Amount by Delinquency in 2 Years and Purpose**: Visualizes how `delinq_2yrs` (delinquency in 2 years) relates to loan amounts and purposes.
+
+
+``` {r echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="Loan Amount by Delinquency in 2 Years"}
+     ggplot(data = extend_version_data, aes(x = delinq_2yrs, y = loan_amnt, color = purpose)) +
+       geom_point() +
+       labs(title = "Loan Amount by Delinquency in 2 Years",
+            x = "Delinquency in 2 Years", y = "Loan Amount", color = "Purpose") +
+       theme_minimal()
+```
+ This plot allows the observation of how delinquency correlates with the loan amount across different loan purposes.
+
+
+-   **Debt-to-Income Ratio over Time and Repay Fail**: Shows how `dti` (debt-to-income ratio) changes over time and how it correlates with loan repayment failures.
+
+```{r echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="Debt to Income Ratio Over Time"}
+   ggplot(data = extend_version_data, aes(x= issue_d, y = dti, colour = as.factor(repay_fail))) +
+       geom_point() +
+       labs(title = "Debt to Income Ratio Over Time",
+            x = "Issue Date", y = "Debt to Income Ratio", colour= "Repay Fail") +
+       theme_minimal()
+```
+
+
+ This chart highlights potential trends in `dti` and repayment success/failure, showing how borrowers' debt loads have changed over time.
+
+-   **Credit Age and Loan Amount by Repay Fail**: Explores the relationship between the borrower's credit age, loan amount, and repayment status.
+
+
+``` {r echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="Loan Amount by Credit Age"}
+     ggplot(data = extend_version_data, aes(x = credit_age_yrs, y = loan_amnt, color = 
+                                              as.factor(repay_fail))) +
+       geom_point() +
+       labs(title = "Loan Amount by Credit Age", x = "Credit Age (Years)", y = "Loan Amount", color = "Repay Fail") +
+       theme_minimal()
+```
+The plot above shows a slight positive correlation between credit age and loan amounts, with distinctions made between those who repaid and those who failed to repay.
+
+-   **Employment Length and Loan Amount by Repay Fail**: Investigates the relationship between employment length, loan amount, and repayment status using a box plot.
+
+
+```{r, echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="Loan Amount by Employment Length"}
+     ggplot(data = extend_version_data, aes(x = emp_length, y = loan_amnt, color = 
+                                              as.factor(repay_fail))) +
+       geom_boxplot() +
+       labs(title = "Loan Amount by Employment Length", x = "Employment Length", y = "Loan Amount", color = "Repay Fail") +
+       theme_minimal()
+```
+This chart reveals differences in repayment failure rates across different employment lengths, particularly for those employed for 10+ years.
+
+-   **Homeownership and Loan Amount by Repay Fail**: Shows how homeownership status influences loan amounts and repayment failures.
+
+``` {r echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="Loan Amount by Home Ownership"}
+     ggplot(data = extend_version_data, aes(x = home_ownership, y = loan_amnt, color = 
+                                              as.factor(repay_fail))) +
+       geom_boxplot() +
+       labs(title = "Loan Amount by Home Ownership", x = "Home Ownership", y = "Loan Amount", color = "Repay Fail") +
+       theme_minimal()
+```
+This visualization helps analyze how homeownership affects loan amounts and repayment success.
+
+
+ **states data visualization**
+```{r echo=FALSE, fig.width=10, fig.height=6, fig.align='center', fig.cap="State-wise Visualization of Loan Data"}
+# display the plots
+(st1 + st2) / (st3 + st4) 
+(st5 + st6) / (st7 + st8) 
+(st9 + st10) 
+st12 / st13
+```
+There appears to be multipale relationships between the geographic location and the loan data. for example the mean insest rate per state is highest in Navada, the highest mean annual income is in New Maxico.
+The model employment length is 10+ years in most states execpt for  states like Idaho and Nebreska with a mode of less than 1 year in this dataset.
+
+### **Correlation Analysis**
+
+-   **Correlation Matrix for Numeric Variables**: A correlation matrix is generated to identify correlations between variables like interest rate, revolving utilization, credit age, etc.
+```{r echo=FALSE}
+     numeric_data <- extend_version_data %>%
+       select_if(is.numeric)
+ correlation_matrix <- cor(numeric_data)
+     ggcorrplot(correlation_matrix)
+```
+ The correlation matrix reveals strong relationships between several numeric variables, such as a positive correlation between open accounts and total accounts, revolving utilization, and interest rate.
+ 
+## Section 1: Generalised Linear Model for load repayment failure prediction
+
+### Question 1
+
+How does your new model perform compared to the one you used previously? How can it be expected
+to perform on new loan applications? For this, you must use the training and validation data used in the previous benchmark.
+
+### Question 2
+
+What are the important variables in this model and how do they compare to variables that are
+traditionally important for predicting credit risk in the banking sector? One regulatory requirement for lenders is that they need to clearly explain how a loan application was assessed. To demonstrate to management that this can be achieved based on your model, clearly interpret all covariates in your model in terms of their effect on predicting credit risk including uncertainty.
+
+## Data
+For this analysis the provdied datasets of 'train' and 'validation' are used.
+```{r}
+str(training_data)
+```
+Given the big number of variables and data points, we will use a random forest model to select important variables and predict the target variable. 
+This is done as training a genralized linear model with all variables up to 2 ways interactions proved computationally expensive, hence a random forest model to select important variables and then train a generalized linear model with the selected variables with stepwise selection.
+
+## Random Forest Model
+```{r}
+set.seed(9940669)  # For reproducibility
+# Define a grid of hyperparameters to tune
+tune_grid <- expand.grid(mtry = c(2, 4, 6, 8))  
+
+# Set up cross-validation method
+control <- trainControl(method = "cv", number = 5)  
+
+# Train the random forest model using the grid of hyperparameters
+rf_grid_search <- train(repay_fail ~ loan_amnt + term + int_rate + emp_length + home_ownership + annual_inc + verification_status + purpose + dti + delinq_2yrs + inq_last_6mths + open_acc + pub_rec + revol_bal + revol_util + credit_age_yrs + close_acc,
+                        data = training_data, 
+                        method = "rf", 
+                        trControl = control,  # Cross-validation method
+                        tuneGrid = tune_grid,
+                        ntree = 500)
+# some of these code snippets were genrated and debugged using Chatgpt                        
+```
+
+
+the random forest model is trained with the following hyperparameters:
+```{r}
+rf_grid_search
+```
+```{r include=FALSE}
+# Get the importance of each feature from the grid-searched random forest model
+importance_rf <- varImp(rf_grid_search)
+
+# Convert importance to a data frame for easier manipulation
+importance_df <- as.data.frame(importance_rf$importance)
+# Rename columns for clarity
+colnames(importance_df) <- c("Importance")
+
+# Add a column for variable names
+importance_df$Variable <- rownames(importance_df)
+
+# sort importance_df
+importance_df <- importance_df[order(importance_df$Importance, decreasing = TRUE), ]
+```
+The importance of variables is shown in the following plot:
+```{r forset_plot,echo=FALSE,fig.width=10, fig.height=6, fig.align='center', fig.cap="Variable Importance Scores from Random Forest Model"}
+# Plot the variable importance scores
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Variable Importance Scores from Random Forest Model",
+       x = "Variable",
+       y = "Importance") +
+  theme_minimal()
+```
+Based on the random forest model, the most important variables for predicting loan repayment failure are the intrest rate , revolving utilisation rate,credit age,revolving balance, annual income, dti, loan amount,number of close accounts and number of open accounts with an importance score of 50 or higher. 
+
+The number of inquiries in the last 6 months, term of the loan, home ownership status,verification status and the number of delinquencies in the last 2 years are somewhat important variables for predicting loan repayment failure, with importance scores between 10 and 40.
+
+The majority of values of employment length are not important for predicting loan repayment failure, with importance scores below 10, expect for the 10+ years category which has an importance score of 10. Similarly, All loan purposes are not important for predicting loan repayment failure, with importance scores below 10, except for the small purpose of debt consolidation which has an importance score of 10.
+
+
+Based on these results the saturated model will be reduced to include only the important variables that have an importance score of 10 or higher, and 2 ways interactions of variables with a score of 50 or higher. note that these numbers are arbitrary and only used as a starting point for the model reduction.
+
+Therefore, employment length of 10+ years and loan purpose of dept consolidation will be encoded as their own variables in the model.
+```
+# encode employmnet length over 10 years as its own variable
+training_data$emp_length_10 <- ifelse(training_data$emp_length == "10+ years", 1, 0)
+
+# purpose of dept consolodation as its own variable
+training_data$purpose_debt_consolidation <- ifelse(training_data$purpose == "debt_consolidation", 1, 0)
+```
+```{r include=FALSE}
+# encode employmnet length over 10 years as its own variable
+training_data$emp_length_10 <- ifelse(training_data$emp_length == "10+ years", 1, 0)
+testing_data$emp_length_10 <- ifelse(testing_data$emp_length == "10+ years", 1, 0)
+validation_data$emp_length_10 <- ifelse(validation_data$emp_length == "10+ years", 1, 0)
+extend_version_data$emp_length_10 <- ifelse(extend_version_data$emp_length == "10+ years", 1, 0)
+# as factor
+training_data$emp_length_10 <- as.factor(training_data$emp_length_10)
+testing_data$emp_length_10 <- as.factor(testing_data$emp_length_10)
+validation_data$emp_length_10 <- as.factor(validation_data$emp_length_10)
+extend_version_data$emp_length_10 <- as.factor(extend_version_data$emp_length_10)
+table(training_data$emp_length_10)
+# purpose of dept consolodation as its own variable
+training_data$purpose_debt_consolidation <- ifelse(training_data$purpose == "debt_consolidation", 1, 0)
+testing_data$purpose_debt_consolidation <- ifelse(testing_data$purpose == "debt_consolidation", 1, 0)
+validation_data$purpose_debt_consolidation <- ifelse(validation_data$purpose == "debt_consolidation", 1, 0)
+extend_version_data$purpose_debt_consolidation <- ifelse(extend_version_data$purpose == "debt_consolidation", 1, 0)
+# as factor
+training_data$purpose_debt_consolidation <- as.factor(training_data$purpose_debt_consolidation)
+testing_data$purpose_debt_consolidation <- as.factor(testing_data$purpose_debt_consolidation)
+validation_data$purpose_debt_consolidation <- as.factor(validation_data$purpose_debt_consolidation)
+extend_version_data$purpose_debt_consolidation <- as.factor(extend_version_data$purpose_debt_consolidation)
+```
+
+This will reduce the 'saturated' model from: 
+```{r} 
+full_logistic_model <- glm(repay_fail ~ (loan_amnt + term + int_rate +
+    emp_length + home_ownership +  annual_inc + verification_status +
+    purpose + dti + delinq_2yrs + inq_last_6mths + open_acc + pub_rec + 
+    revol_bal + revol_util + credit_age_yrs + close_acc)^2, 
+    data = training_data, family = "binomial")
+```
+
+to:
+```{r}
+reduced_logistic_model <- glm(repay_fail ~ home_ownership + inq_last_6mths + 
+                                term + delinq_2yrs  + verification_status +
+                                emp_length_10 + purpose_debt_consolidation +  
+                                (int_rate + revol_util + credit_age_yrs + annual_inc + 
+                                   dti + loan_amnt + close_acc +open_acc )^2,
+                              data = training_data, family = "binomial")
+```
+
+```{r include=FALSE}
+aic_full <- AIC(full_logistic_model)
+aic_reduced <- AIC(reduced_logistic_model)
+```
+The AIC of the full model is `r paste(round(aic_full))` and the AIC of the reduced model is `r paste(round(aic_reduced))`. The reduced model has a lower AIC value, indicating that it is a better fit to the data than the full model already. 
+
+## Stepwise Selection
+The reduced model will be used as the starting point for stepwise selection to identify the best model based on the AIC value. This will reduce the number of variables in the model and improve its interpretability, and reduce the risk of overfitting and complexity.
+```{r }
+null_model <- glm(repay_fail ~ 1, data = training_data, family = "binomial")
+step_model <- stepAIC(null_model,
+                                    scope = formula(reduced_logistic_model),
+                                    direction = "both",
+                                    trace = 0)
+```
+```{r}
+summary(step_model)
+```
+```{r include=FALSE}
+aic_step <- AIC(step_model)
+```
+The stepwise selection model has the lowest AIC value, indicating that it is the best model among the three in terms of goodness of fit and complexity.
+```{r}
+print(summary(step_model)$dispersion)
+```
+The dispersion parameter of the forward model is 1, which indicates that the model is well-calibrated.
+
+### Model Evaluation
+Based on feedback from stakeholders, the model will be evaluated using the validation data set. The model will be used to predict the probability of loan repayment failure for each loan application in the validation data set. The model will then be evaluated using the area under the ROC curve (AUC) and the Gini coefficient. The Gini coefficient is a measure of the model's ability to discriminate between good and bad loans, with a higher value indicating better performance.
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+# Predict the probability of loan repayment using the stepwise selection  model
+training_data$stepwise_prob <- predict(step_model, type = "response")
+validation_data$stepwise_prob <- predict(step_model, newdata = validation_data, type = "response")
+testing_data$stepwise_prob <- predict(step_model, newdata = testing_data, type = "response")
+
+# Calculate the ROC curve and Gini score for the forward model
+roc_train <- roc(training_data$repay_fail, training_data$stepwise_prob)
+roc_val <- roc(validation_data$repay_fail, validation_data$stepwise_prob)
+roc_test <- roc(testing_data$repay_fail, testing_data$stepwise_prob)
+
+gini_train <- calc_gini(roc_train)
+gini_val <- calc_gini(roc_val)
+gini_test <- calc_gini(roc_test)
+```
+
+
+```{r gini_roc_plot,echo=FALSE,fig.width=10, fig.height=6, fig.align='center', fig.cap="ROC Curves for the Training and Validation Data Sets with Gini Scores"}
+# Plot the ROC curves with gini scores in title
+plot_training_roc <- ggroc(roc_train) +
+  labs(title = paste("Training set ROC, Gini =", round(gini_train, 3))) +
+  theme_minimal()
+plot_validation_roc <- ggroc(roc_val) +
+  labs(title = paste("Validation set ROC, Gini =", round(gini_val, 3))) +
+  theme_minimal()
+
+  
+# Display the ROC curves next to each other and add overall title
+plot_training_roc + plot_validation_roc
+
+
+```
+
+```{r include=FALSE}
+# Predict the probability of loan repayment using the random forest model
+training_data$rf_prob <- predict(rf_grid_search, newdata = training_data, type = "prob")[,2]  # Get probabilities for the positive class
+validation_data$rf_prob <- predict(rf_grid_search, newdata = validation_data, type = "prob")[,2]
+testing_data$rf_prob <- predict(rf_grid_search, newdata = testing_data, type = "prob")[,2]
+
+# roc
+roc_train_rf <- roc(training_data$repay_fail, training_data$rf_prob)
+roc_val_rf <- roc(validation_data$repay_fail, validation_data$rf_prob)
+roc_test_rf <- roc(testing_data$repay_fail, testing_data$rf_prob)
+# Calculate the Gini score
+gini_train_rf <- calc_gini(roc_train_rf)
+gini_val_rf <- calc_gini(roc_val_rf)
+gini_test_rf <-  calc_gini(roc_test_rf)
+
+# Predict the probability of loan repayment using the reduced logistic model
+training_data$reduced_prob <- predict(reduced_logistic_model, type = "response")
+validation_data$reduced_prob <- predict(reduced_logistic_model, newdata = validation_data, type = "response")
+testing_data$reduced_prob <- predict(reduced_logistic_model, newdata = testing_data, type = "response")
+# Calculate the ROC curve and Gini score for the reduced logistic model
+roc_train_reduced <- roc(training_data$repay_fail, training_data$reduced_prob)
+roc_val_reduced <- roc(validation_data$repay_fail, validation_data$reduced_prob)
+roc_test_reduced <- roc(testing_data$repay_fail, testing_data$reduced_prob)
+
+# Calculate the Gini score
+gini_train_reduced <- calc_gini(roc_train_reduced)
+gini_val_reduced <- calc_gini(roc_val_reduced)
+gini_test_reduced <- calc_gini(roc_test_reduced)
+
+
+
+# Predict the probability of loan repayment using the full logistic model
+training_data$full_prob <- predict(full_logistic_model, type = "response")
+validation_data$full_prob <- predict(full_logistic_model, newdata = validation_data, type = "response")
+testing_data$full_prob <- predict(full_logistic_model, newdata = testing_data, type = "response")
+# Calculate the ROC curve and Gini score for the full logistic model
+roc_train_full <- roc(training_data$repay_fail, training_data$full_prob)
+roc_val_full <- roc(validation_data$repay_fail, validation_data$full_prob)
+roc_test_full <- roc(testing_data$repay_fail, testing_data$full_prob)
+# Calculate the Gini score
+gini_train_full <- 2 * auc(roc_train_full) - 1
+gini_val_full <- 2 * auc(roc_val_full) - 1
+gini_test_full <- 2 * auc(roc_test_full) - 1
+# Compare the Gini scores of the different models
+aic_step <- AIC(step_model)
+gini_scores <- data.frame(
+  Model = c( "Reduced Logistic", "Stepwise Selection", "Full Logistic", "Benchmark"),
+  Training_gini = c( gini_train_reduced, gini_train, gini_train_full, 0.114),
+  Validation_gini = c( gini_val_reduced, gini_val, gini_val_full, 0.110),
+  aic = c( round(aic_reduced), round(aic_step), round(aic_full), NA),
+  num_variables = c( length(coef(reduced_logistic_model)), length(coef(step_model)), length(coef(full_logistic_model)), NA)
+)
+  # round to 2 decimal places
+gini_scores <- gini_scores %>% mutate(across(c(Training_gini, Validation_gini), ~ round(., 3)*100))
+```
+### comparison of the models
+```{r}
+gini_scores
+```
+Compared to the Benchmark model, all the models developed outperformed it in terms of the Gini score. 
+The full logistic model has the highest Gini score on the training data. on the validation data, the reduced logistic model has the highest Gini score, followed by the stepwise selection model. The full logistic model has the lowest Gini score of the 3 GLMs on the validation data, indicating that it is overfitting the training data.
+
+Given how close the AIC scores and Gini scores of the reduced logistic model and the stepwise selection model are on the validation data, and the fact that the stepwise selection model has fewer variables, it is the best model among the three in terms of goodness of fit and complexity.
+
+## Interpretation of the Model
+To improve interpretability, the coefficients of the stepwise selection model will be exponentiated to show the effect of each variable. and the load amount and annual income will be scaled to 10 thousands and the revolving utilisation rate will be scaled by a 100 to make the coefficients more interpretable. 
+```{r}
+training_data$loan_amnt_10k <- training_data$loan_amnt/10000
+training_data$annual_inc_10k <- training_data$annual_inc/10000
+training_data$revol_util_scaled <- training_data$revol_util*100
+
+
+int_model <- glm(formula = repay_fail ~ 0 + int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation + 
+    loan_amnt_10k + int_rate:revol_util_scaled + annual_inc_10k:revol_util_scaled + 
+    revol_util_scaled:loan_amnt_10k + annual_inc_10k:loan_amnt_10k, family = "binomial", 
+    data = training_data)
+stepwise_coefs <- exp(coef(int_model))
+```
+```{r include=FALSE}
+extend_version_data$loan_amnt_10k <- extend_version_data$loan_amnt/10000
+extend_version_data$annual_inc_10k <- extend_version_data$annual_inc/10000
+extend_version_data$revol_util_scaled <- extend_version_data$revol_util*100
+```
+
+
+
+```{r include=FALSE}
+
+stepwsie_intervals_lower <- exp(confint(int_model))[,1]
+stepwsie_intervals_upper <- exp(confint(int_model))[,2]
+# calculate the effect
+effect <- abs((stepwise_coefs - 1) * 100)
+effect_upper <- abs((stepwsie_intervals_upper - 1) * 100)
+effect_lower <- abs((stepwsie_intervals_lower - 1) * 100)
+# show in a table as a percentage
+effect_table <- data.frame(
+  exp_Coefficient = stepwise_coefs,
+  p_value = paste(round(summary(int_model)$coefficients[,4], 5)),
+  Effect = paste(ifelse(stepwsie_intervals_lower > 1, "+", "-"), round(effect, 5), "%"),
+  conf_lower = paste(ifelse(stepwsie_intervals_lower > 1, "+", "-"), round(effect_lower, 5), "%"),
+  conf_upper = paste(ifelse(stepwsie_intervals_upper > 1, "+", "-"), round(effect_upper, 5), "%")
+)
+# if p value is 0, replace with <0.0001
+effect_table$p_value[effect_table$p_value  == 0] <- "<0.0001"
+```
+
+
+```{r effect_table,echo=FALSE,fig.width=10, fig.height=6, fig.align='center', fig.cap="Effect of Variables on Loan Repayment Failure"}
+# show all 13 rows at once
+
+options(dplyr.print_max = nrow(effect_table))
+effect_table
+
+```
+The sigificant variables in the selected model are the:
+  - Interest rate
+  - Inquries in the last 6 months
+  - Annual income
+  - Term of the loan (36 or 60 months) 
+  - Revolving utilisation rate
+  - Loan amount
+And the interactions of 
+  - interest rate and revolving utilisation rate
+  - annual income and revolving utilisation rate
+  - revolving utilisation rate and loan amount
+  - annual income and loan amount
+  
+where in the literature, Dm & Mm (2018), developed a logistic regression model to predicting Individual Loan Defaults rates, where only number of credits taken, existing credits and delayed payments (similar to delinquencies had a significant p-value (alpha of 0.05). And Li & Wu (2024), developed a logistic regression model to predict loan default rates, where the varibales with a significant p-value were age, working years and current job years (similar to working length in our data), income, marriage status, car ownership, and renting status (similar to home ownership in our data). 
+Meaning compared to the 2 models cited, only the annual income and employment length are the common significant variables with the designed model.
+
+### Effect of each variable: 
+
+**Interest rate** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. For every 1% increase in the interest rate, the odds of loan repayment failure increase by 17%, with a 95% confidence interval of 20% to 14% risk increase.
+ 
+**Inquries in the last 6 months** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. For every additional inquiry in the last 6 months, the odds of loan repayment failure increase by approximately 16%. The number of inquiries in the last 6 months has a 95% confidence interval of 18% to 13% risk increase.
+
+**Annual income** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. For every $10,000 increase in annual income, the odds of loan repayment failure decrease by 10%. The annual income has a 95% confidence interval of 13% to 7% risk decrease.
+
+**Term of the loan** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. Loans with a term of 60 months decrease the odds of loan repayment failure by 97% and a 95% confidance interval of 98% to 95% chance decrease in loan repayment failure. 
+where a term of 36 months decrease the odds of loan repayment failure by 98%, and a confidence interval of 98% to 97% decrease in loan repayment failure.
+
+**Revolving utilisation rate** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. For every 1% increase in the revolving utilisation rate, the odds of loan repayment failure increase by 1%. The revolving utilisation rate has a 95% confidence interval of 2% to 1% risk increase.
+
+**Employment length of 10+ years** has a p-value of 0.00563, indicating that it is a significant predictor of loan repayment failure. Loan applicants with employment length of 10+ years have a 14% higher odds of loan repayment failure than those with employment length of less than 10 years. The employment length of 10+ years has a 95% confidence interval of 24.6% to 3.8% risk increase, showing that the effect of the employment length of 10+ years on loan repayment failure has uncertainty.
+
+**Loan amount** has a p-value of 0.049, indicating that it is a significant predictor of loan repayment failure. For every $10,000 increase in the loan amount, the odds of loan repayment failure increase by 16%. The loan amount has a 95% confidence interval of 0.04% to 34% risk increase, showing that the effect of the loan amount on loan repayment fairure has uncertainty.
+
+**Interest rate and revolving utilisation rate** has a p-value of less than 0.0001, indicating that it is a significant predictor of loan repayment failure. The effect of the interaction is multiplicative, meaning that the effect of the interest rate on loan repayment failure is amplified by the revolving utilisation rate. For every 1% increase in the interest rate and revolving utilisation rate, the odds of loan repayment failure decreases by Approximately 0.1%, with a 95% confidence interval of 0.12% to 0.04% risk decrease.
+
+**Annual income and revolving utilisation rate** has a p-value of less than 0.004, indicating that it is a significant predictor of loan repayment failure.  For every $10,000 increase in annual income and 1% increase in the revolving utilisation rate, the odds of loan repayment failure increase by 0.06%, with a 95% confidence interval of 0.1% to 0.02% risk increase.
+
+**Revolving utilisation rate and loan amount** has a p-value of less than 0.0074,and  for every 1% increase in the revolving utilisation rate and $10,000 increase in the loan amount, the odds of loan repayment failure decreases by 0.28%, with a 95% confidence interval of 0.48% to 0.07% risk decrease.
+
+
+#### insignificant variables
+**Purpose of debt consolidation** has a p-value of 0.07629, indicating that it is not a significant predictor of loan repayment failure. Loan applicants with the purpose of debt consolidation have a 6.8% lower odds of loan repayment failure than those with other purposes. The purpose of debt consolidation has a 95% confidence interval of 13.9% decrease to 0.75% increase in loan repayment failure, showing that the effect of the purpose of debt consolidation on loan repayment failure has a higher level of uncertainty.
+
+**Annual income and loan amount** has a p-value of 0.10441, indicating that it is not a significant predictor of loan repayment failure. For every $10,000 increase in annual income and loan amount, the odds of loan repayment failure decreases by approximately 1%, with a 95% confidence interval of 1.95% increase to 0.2% decrease in loan repayment failure, showing that the effect of the annual income and loan amount on loan repayment failure has a higher level of uncertainty.
+
+
+## Section 2: Mixed Effects Models
+After management consulations with expert it has been decided to use the extended version of the data to address the questions:
+### Questions:
+3. Can accounting for this variation (e.g., state/zip-code and time) improve performance benchmarks?
+
+4. Are there any surprising differences in variables that are important for predicting credit risk? This is again
+essential for regulations.
+
+5. Does credit risk change over time or between states? This is not something the bank has previously
+investigated and results may inform modified loan policies in the future.
+
+## Data
+```{r include=FALSE}
+extended_data<- extend_version_data
+
+```
+
+```{r}
+str(extended_data)
+```
+## Mixed Effects Model
+The initial model used to analyse the affect of Zip Code and Issue Dates was:
+``` {r, include = TRUE, warning=FALSE, message=FALSE} 
+state_time_model <- lmer(data = extended_data,
+                         repay_fail ~ home_ownership +
+                           inq_last_6mths + term + delinq_2yrs +
+                           verification_status + emp_length_10 +
+                           purpose_debt_consolidation + (int_rate +
+                                                           revol_util_scaled +
+                                                           credit_age_yrs +
+                                                           annual_inc_10k + dti +
+                                                           loan_amnt_10k +
+                                                           close_acc +
+                                                           open_acc) ^2 +
+                           (1 | zip_code) + (1 | issue_d))
+summary(state_time_model)
+```
+
+``` {r, include = TRUE}
+
+AIC(state_time_model)
+
+```
+
+The AIC of the mixed effects model is higher than that of the initial model. This is to be expected, as the increased number of interactions between each variable increases the complexity of the model. Thus, the AIC value is raised.
+
+When analysing the significance of each covariate in the model, it is observed that a select number of covariates, such as revol_util, annual_inc and loan_amnt all become insignificant. 
+
+To understand whether removing the covariates from the final model improves benchmarks, the model below was built to test this. 
+
+``` {r, include=TRUE}
+
+state_time_model_2 <- lmer(data = extended_data,
+                         formula <- repay_fail ~ home_ownership +
+                           inq_last_6mths + term + delinq_2yrs +
+                           verification_status + emp_length_10 +
+                           purpose_debt_consolidation + (int_rate +
+                                                           credit_age_yrs +
+                                                           dti +
+                                                           close_acc +
+                                                           open_acc) ^2 +
+                           (1 | zip_code) + (1 | issue_d))
+summary(state_time_model_2)
+
+```
+
+Checking the AIC of the new mixed effects model.
+
+``` {r, include = TRUE} 
+AIC(state_time_model_2)
+```
+
+The AIC of the second model is lower than the original model, indicating the less complex model is potentially a better fit than the initial mixed effects model. 
+
+Performance benchmarks, such as Gini Scores and the AUC/ROC should be analysed to check for the model fit to justify whether the more complex model can fit the data better
+
+``` {r, include = TRUE}
+
+extended_data$probability_model_1 <- predict(state_time_model, type = "response")
+roc_state_time_model_1 <- roc(extended_data$repay_fail, extended_data$probability_model_1)
+
+extended_data$probability_model_2 <- predict(state_time_model_2, type = "response")
+roc_state_time_model_2 <- roc(extended_data$repay_fail, extended_data$probability_model_2)
+
+
+
+gini_state_time_model_1 <- 2 * auc(roc_state_time_model_1) - 1
+gini_state_time_model_1
+
+gini_state_time_model_2 <- 2 * auc(roc_state_time_model_2) - 1
+gini_state_time_model_2
+
+```
+
+``` {r, include = TRUE} 
+
+initial_model_roc <- ggroc(roc_state_time_model_1) + labs(title = paste("\n Extended Dataset Gini =", round(gini_state_time_model_1, 3))) 
+
+second_model_roc <- ggroc(roc_state_time_model_2) + labs(title = paste("\n Extended Dataset Gini =", round(gini_state_time_model_2, 3))) 
+
+grid.arrange(initial_model_roc, second_model_roc)
+
+```
+
+When comparing the Gini Scores, overall it is noted that accounting for the variation between jurisdictions and over time in the credit risk model does improve performance benchmarks to a minor extent. 
+
+However, while the second model with less covariates has a better AIC score, the Gini Score indicates greater heterogeneity in the initial mixed effects model. Having greater heterogeneity in the model is important, as it better distinguishes customers who are likely able to pay off their loans or default on them. 
+
+## comparing mixed effects model to generalised linear model
+```{r}
+extended_select_model <- glm(formula = repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation + 
+    loan_amnt_10k + int_rate:revol_util_scaled + annual_inc_10k:revol_util_scaled + 
+    revol_util_scaled:loan_amnt_10k + annual_inc_10k:loan_amnt_10k, family = "binomial", 
+    data = extended_data)
+state_time_model_select <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation + 
+    loan_amnt_10k + int_rate:revol_util_scaled + annual_inc_10k:revol_util_scaled + 
+    revol_util_scaled:loan_amnt_10k + annual_inc_10k:loan_amnt_10k +
+                           (1 | zip_code) + (1 | issue_d))
+
+
+extended_data$probability_select <- predict(extended_select_model, type = "response")
+roc_select <- roc(extended_data$repay_fail, extended_data$probability_select)
+gini_select <- calc_gini(roc_select)
+
+extended_data$probability_mixed <- predict(state_time_model_select, type = "response")
+roc_mixed <- roc(extended_data$repay_fail, extended_data$probability_mixed)
+gini_mixed <- calc_gini(roc_mixed)
+
+gini_scores <- data.frame(
+  Model = c( "GLM", "Mixed Effects"),
+  Gini = c( gini_select, gini_mixed)
+)
+  # round to 2 decimal places
+gini_scores <- gini_scores %>% mutate(across(c(Gini), ~ round(., 3)*100))
+gini_scores
+```
+Comparing the prefromace of the mixed effect model with the same parameters as the GLM model, the mixed effect model has a higher Gini score than the GLM model. This indicates that the mixed effect model is better at distinguishing between good and bad loans than the GLM model.
+
+```{r}
+summary(state_time_model_select)
+```
+Note that laon amount and the interaction intrest rate and revolving  utilisations rate, revolving  utilisations rate and laod amount, and annual income and loan amount are not significant in the mixed effect model, hence they can be removed from the model to reduce complexity and improve interpretability.
+
+```{r echo=FALSE}
+
+state_time_model_select_reduced <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation  + int_rate:revol_util_scaled  + (1 | zip_code) + (1 | issue_d))
+
+
+extended_data$probability_select_reduced <- predict(state_time_model_select_reduced, type = "response")
+roc_select_reduced <- roc(extended_data$repay_fail, extended_data$probability_select_reduced)
+gini_select_reduced <- calc_gini(roc_select_reduced)
+
+
+gini_scores <- data.frame(
+  Model = c( "GLM", "Mixed Effects", "Mixed Effects Reduced"),
+  Gini = c( gini_select, gini_mixed, gini_select_reduced),
+  AIC = c( round(AIC(extended_select_model)), round(AIC(state_time_model_select)), round(AIC(state_time_model_select_reduced)))
+)
+  # round to 2 decimal places
+gini_scores <- gini_scores %>% mutate(across(c(Gini), ~ round(., 3)*100))
+gini_scores
+```
+The reduced mixed effects model has a lower AIC value than the full mixed effects model, indicating that it is a better fit to the data. The reduced mixed effects model also has a higher Gini score than the GLM model.
+
+
+## Visualising the effect of time and location on credit risk
+First exploring the effect of issue date and zip code on repayment failure separately on gini scores.
+
+```{r}
+state_model_select_reduced <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation  + int_rate:revol_util_scaled  + (1 | zip_code) )
+
+
+date_model_select_reduced <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation  + int_rate:revol_util_scaled  + (1 | issue_d) )
+
+
+extended_data$probability_state <- predict(state_model_select_reduced, type = "response")
+roc_state <- roc(extended_data$repay_fail, extended_data$probability_state)
+gini_state <- calc_gini(roc_state)
+
+extended_data$probability_date <- predict(date_model_select_reduced, type = "response")
+roc_date <- roc(extended_data$repay_fail, extended_data$probability_date)
+gini_date <- calc_gini(roc_date)
+```
+
+
+```{r}
+gini_scores <- data.frame(
+  Model = c( "GLM", "Mixed Effects Reduced", "Mixed Effects Zip code", "Mixed Effects Date"),
+  Gini = c( gini_select, gini_select_reduced, gini_state, gini_date),
+  AIC = c( round(AIC(extended_select_model)), round(AIC(state_time_model_select_reduced)), round(AIC(state_model_select_reduced)), round(AIC(date_model_select_reduced))))
+  # round to 2 decimal places
+gini_scores <- gini_scores %>% mutate(across(c(Gini), ~ round(., 3)*100))
+gini_scores
+```
+
+The mixed effects model with the zip code as a random effect has a higher Gini score than the mixed effects model with the issue date as a random effect. This indicates that the zip code has a greater effect on credit risk than the issue date.
+
+
+## accounting for state and zip code in the model
+intrude a varible **sample** to account for the state and zip code in the model
+```{r}
+extended_data$sample <- factor(as.factor(extended_data$addr_state):extended_data$zip_code)
+```
+```{r}
+state_zip_model_select_reduced_sample <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation  + int_rate:revol_util_scaled  + (1 | sample) )
+
+extended_data$probability_sample <- predict(state_zip_model_select_reduced_sample, type = "response")
+roc_sample <- roc(extended_data$repay_fail, extended_data$probability_sample)
+gini_sample <- calc_gini(roc_sample) *100
+gini_scores <- gini_scores %>% add_row(Model = "Mixed Effects Sample(satate:zip)", Gini = gini_sample, AIC = round(AIC(state_zip_model_select_reduced_sample)))
+```
+
+
+```{r}
+state_time_model_select_reduced_sample <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation  + int_rate:revol_util_scaled  + (1 | sample) + (1 | issue_d))
+
+
+extended_data$probability_sample <- predict(state_time_model_select_reduced_sample, type = "response")
+roc_sample <- roc(extended_data$repay_fail, extended_data$probability_sample)
+gini_sample <- calc_gini(roc_sample) *100
+gini_scores <- gini_scores %>% add_row(Model = "Mixed Effects Sample(satate:zip, issue date)", Gini = gini_sample, AIC = round(AIC(state_time_model_select_reduced_sample)))
+
+```
+```{r}
+gini_scores %>% mutate(across(c(Gini), ~ round(., 3)))
+```
+The mixed effects model with the sample variable (state:zip code) and issue date has the highest Gini score, indicating that it is the best model among the four in terms of goodness of fit and complexity. The mixed effects model with the sample variable also has the lowest AIC value, indicating that it is the best model among the four in terms of goodness of fit and complexity.
+
+
+### Visualision and Interpretation of Final Model
+To visualise the effect of the year and state on credit risk, a model with only the year and state as random effects is built, as it is harder to visualise the effect of the full date and zip code on credit risk.
+```{r}
+year_levels <- as.character(2007:2011)
+extended_data$issue_year <- factor(x = year(extended_data$issue_d), levels = year_levels)
+fit <- lmer(data = extended_data,
+                         repay_fail ~  int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation + 
+    loan_amnt_10k + int_rate:revol_util_scaled + annual_inc_10k:revol_util_scaled + 
+    revol_util_scaled:loan_amnt_10k + annual_inc_10k:loan_amnt_10k  + (1 | issue_year) + (1 | addr_state) )
+```
+```{r, fig.width=10, fig.height=10, fig.align='center', fig.cap="Dotplot of the Random Effects of Year"}
+dotplot(ranef(fit))
+```
+```{r}
+gini_score_year_state <- calc_gini(roc(extended_data$repay_fail, predict(fit, type = "response")))
+gini_score_year_state
+gini_select
+```
+The gini score of the simplifed random effect model is 39% which is higher than the gini score of the random effect of the glm model on the extended data without the effect of 37.7% indicating that the random effect model is better at distinguishing between good and bad loans than the glm model.
+
+### interpretation of the random effects
+Random effect on year:
+The years of 2007 and 2008 have a positive effect on credit risk, meaning loans in these two years are more likely to fail than loans in other years. The years of 2009, 2010, and 2011 have a negative effect on credit risk, meaning loans in these years are less likely to fail than loans in other years. further more non of the dots are close to the zero line, indicating that the effect of the year on credit risk is significant and has a large effect on credit risk.
+
+Random effect on state: 
+The states of NV (Nevada), FL (Florida), CA (California) and GA (Georgia) all do not overlap zero and a posstive intercept, indicating that loans in these states are more likely to fail than loans in other states. 
+The states of CO (Colorado) and OH (Ohio) are the only states with a negative intercept that do not overlap zero, indicating that loans in these states are less likely to fail than loans in other states.
+### interpretation of the fixed effects
+adding an intercept of zero to the model to make the fixed effects more interpretable.
+
+```{r}
+fit <- lmer(data = extended_data,
+                         repay_fail ~  0 +int_rate + inq_last_6mths + annual_inc_10k + 
+    term + revol_util_scaled + emp_length_10 + purpose_debt_consolidation + 
+    loan_amnt_10k + int_rate:revol_util_scaled + annual_inc_10k:revol_util_scaled + 
+    revol_util_scaled:loan_amnt_10k + annual_inc_10k:loan_amnt_10k  + (1 | issue_year) + (1 | addr_state) )
+```
+
+
+```{r}
+
+conf_intervals <- confint(fit, parm="beta_", level=0.95)  # 95% confidence intervals
+
+```
+```{r}
+exp(conf_intervals)
+```
+
+
+```{r}
+# Extract only the estimates of the fixed effects
+
+fixed_effects <- exp(fixef(fit))
+intervals_lower <- exp(conf_intervals)[,1]
+intervals_upper <- exp(conf_intervals)[,2]
+# calculate the effect
+effect <- abs((fixed_effects - 1) * 100)
+effect_upper <- abs((intervals_lower - 1) * 100)
+effect_lower <- abs((intervals_upper - 1) * 100)
+# show in a table as a percentage
+effect_table <- data.frame(
+  exp_Coefficient = fixed_effects,
+  Effect = paste(ifelse(stepwsie_intervals_lower > 1, "+", "-"), round(effect, 5), "%"),
+  conf_lower = paste(ifelse(stepwsie_intervals_lower > 1, "+", "-"), round(effect_lower, 5), "%"),
+  conf_upper = paste(ifelse(stepwsie_intervals_upper > 1, "+", "-"), round(effect_upper, 5), "%"),
+  p_value = paste(round(summary(fit)$coefficients[,5], 5))
+)
+# if p value is 0, replace with <0.0001
+effect_table$p_value[effect_table$p_value  == 0] <- "<0.0001"
+```
+```{r}
+effect_table
+```
+**Significant variables:**
+- Interest rate has a p-value of less than 0.0001. For every 1% increase in the interest rate, the odds of loan repayment failure increase by 1.4%, with a 95% confidence interval of 1.6% to 1.1% risk increase.
+
+- inquries in the last 6 months has a p-value of less than 0.0001. For every additional inquiry in the last 6 months, the odds of loan repayment failure increase by 1.95%, with a 95% confidence interval of 2.2% to 1.7% risk increase.
+
+- annual income has a p-value of 0.02261. For every $10,000 increase in annual income, the odds of loan repayment failure decrease by 0.15%, with a 95% confidence interval of 0.28% to 0.02% risk decrease.
+
+- revolving utilisation rate has a p-value of less than 0.04664. For every 1% increase in the revolving utilisation rate, the odds of loan repayment failure increase by 0.04705%, with a 95% confidence interval of 0.0934% to 7e-04% risk increase.
+- emp_length_10 has a p-value of 0.00018 Loan applicants with employment length of 10+ years have a 1.64% higher odds of loan repayment failure than those with employment length of less than 10 years. The employment length of 10+ years has a 95% confidence interval of 0.77739% to 0.77739% risk increase.
+-  the interaction term betweeen annual income and revolving utlisation rate is significant with a  p value of 0.0251, and every $10,000 increase in loan amount and 1% increase in utalisation rate is associateed with 0.00237% increase in repayment failure rate with a 95 confidance intgral of  3e-04%	to 0.00444% increease. 
+The term of load, purposedebt consolidation, and loan ammount and  other interactions are not significant in this model.
+
+## Conclusion
+
+# Refrences
+
+Dm, O., & Mm, M. (2018). Comparison of Accuracy of Support Vector Machine Model and Logistic Regression Model in Predicting Individual Loan Defaults. American Journal of Applied Mathematics and Statistics. http://pubs.sciepub.com/ajams/6/6/8
+
+Li, H., & Wu, W. (2024). Loan default predictability with explainable machine learning. Finance Research Letters, 60, 104867. https://doi.org/10.1016/j.frl.2023.104867
+
